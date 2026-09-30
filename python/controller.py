@@ -20,6 +20,8 @@ ZERO_PATH = Path(__file__).resolve().parents[1] / 'data' / 'zero_pos.json'
 EXCLUSIVE_MODES = ('calibrate', 'servo_debug')
 PICK_PERIOD_S = 4.0
 PICK_MOUTH_CLOSE_PHI = 0.4
+ROULADE_S = 1.9
+ROULADE_ALPHA = 0.15
 CONTROL_PERIOD = 0.02
 
 class Controller:
@@ -42,10 +44,17 @@ class Controller:
         if not ok:
             raise RuntimeError(message)
         self.model_message += '; ' + message
+        self.roulade_policy = Policy()
+        ok, message = self.roulade_policy.load('xgoduck_roulade.onnx')
+        if not ok:
+            raise RuntimeError(message)
+        self.model_message += '; ' + message
         self.recovery = Recovery()
         self.policy_needs_reset = True
         self.pick_active = False
         self.pick_phi = 0.0
+        self.roulade_until = 0.0
+        self._roulade_alpha = None
         self._warm_index = 0
         self.filter = SignalFilter()
         self.feedback = self.filtered = None
@@ -145,7 +154,7 @@ class Controller:
                     self.mode = 'shadow'; self.generation += 1
                     self.arm_pending = False; self.filter.reset()
                     self.recovery.reset(); self.policy_needs_reset = True
-                    self._stop_pick_locked()
+                    self._stop_pick_locked(); self._stop_roulade_locked()
                     self._zeros_pushed = False
                 else:
                     self.gaps += step-1
@@ -186,7 +195,7 @@ class Controller:
             previous = self.mode
             self.generation += 1; self.mode = mode
             self.recovery.reset(); self.policy_needs_reset = True
-            self._stop_pick_locked()
+            self._stop_pick_locked(); self._stop_roulade_locked()
             self.last_error = ''
             self.web_time = time.monotonic()
             self.twist, self.head, self.mouth = [0.0]*3, [0.0]*4, 0.0
@@ -210,24 +219,47 @@ class Controller:
             self.policy.reset_action_filter()
             self.getup_policy.reset_action_filter()
             self.pick_policy.reset_action_filter()
+            self.roulade_policy.reset_action_filter()
         return {'mode': mode}
 
+    def _models(self):
+        return (self.policy, self.getup_policy, self.pick_policy, self.roulade_policy)
+
+    def _apply_alphas_locked(self, leg, head):
+        for model in self._models():
+            model.set_action_alphas(leg=leg, head=head)
+
     def set_action_alphas(self, **values):
-        with self.policy_lock:
-            leg, head = self.policy.set_action_alphas(**values)
-            self.getup_policy.set_action_alphas(leg=leg, head=head)
-            self.pick_policy.set_action_alphas(leg=leg, head=head)
-            return leg, head
+        with self.lock:
+            with self.policy_lock:
+                leg, head = self.policy.set_action_alphas(**values)
+                if self._roulade_alpha is not None:
+                    self._roulade_alpha = (leg, head)
+                    self._apply_alphas_locked(ROULADE_ALPHA, ROULADE_ALPHA)
+                else:
+                    self._apply_alphas_locked(leg, head)
+                return leg, head
 
     def _stop_pick_locked(self):
         self.pick_active = False
         self.pick_phi = 0.0
 
+    def _stop_roulade_locked(self):
+        self.roulade_until = 0.0
+        saved = self._roulade_alpha
+        self._roulade_alpha = None
+        if saved is not None:
+            with self.policy_lock:
+                self._apply_alphas_locked(*saved)
+
+    def _roulade_on(self, now):
+        return now < self.roulade_until
+
     def start_pick(self):
         with self.lock:
             if self.mode not in ('shadow', 'policy'):
                 raise ValueError('pick requires shadow/policy mode')
-            if self.recovery.phase != 'walk':
+            if self.recovery.phase != 'walk' or self._roulade_on(time.monotonic()):
                 raise ValueError('pick only while walking upright')
             self.pick_active = True
             self.pick_phi = 0.0
@@ -239,6 +271,24 @@ class Controller:
             self.pick_policy.reset_action_filter()
             self.pick_policy.warm(2)
         return {'ok': True, 'phi': 0.0, 'model': self.pick_policy.file}
+
+    def start_roulade(self):
+        with self.lock:
+            if self.mode not in ('shadow', 'policy'):
+                raise ValueError('roulade requires shadow/policy mode')
+            if self.recovery.phase != 'walk' or self.pick_active:
+                raise ValueError('roulade only while walking')
+            if self._roulade_alpha is None:
+                self._roulade_alpha = (self.policy.action_alpha, self.policy.action_alpha_head)
+            self.roulade_until = time.monotonic() + ROULADE_S
+            self.policy_needs_reset = True
+            self.web_time = time.monotonic()
+            self.last_error = ''
+            with self.policy_lock:
+                self._apply_alphas_locked(ROULADE_ALPHA, ROULADE_ALPHA)
+                self.roulade_policy.reset_action_filter()
+                self.roulade_policy.warm(2)
+        return {'ok': True, 'model': self.roulade_policy.file, 'seconds': ROULADE_S}
 
     def command(self, twist=None, head=None, mouth=None):
         def values(seq, limits):
@@ -350,7 +400,7 @@ class Controller:
                     self.arm_pending = False; self.last_error = lost
                     generation = self.generation
                     self.recovery.reset(); self.policy_needs_reset = True
-                    self._stop_pick_locked()
+                    self._stop_pick_locked(); self._stop_roulade_locked()
             elif mode in EXCLUSIVE_MODES:
                 if time.monotonic()-self.web_time > 2.0:
                     previous = mode
@@ -366,15 +416,27 @@ class Controller:
             twist, head, mouth = list(self.twist), list(self.head), self.mouth
             valid = bool(fb and age < .15 and fb.imu_ok and filt
                          and filt['imu_fusion_ready'] and filt['imu_fusion_updated'])
-            if mode in ('shadow', 'policy'):
+            now = time.monotonic()
+            if self.roulade_until and now >= self.roulade_until:
+                self._stop_roulade_locked()
+                self.recovery.fall_elapsed = 0.0
+                self.policy_needs_reset = True
+            rolling = self._roulade_on(now)
+            if mode in ('shadow', 'policy') and not rolling:
                 changed = self.recovery.update(filt['grav'] if filt else [0,0,0],
-                                               time.monotonic(), valid)
+                                               now, valid)
                 self.policy_needs_reset |= changed
                 if changed and self.recovery.phase != 'walk':
                     self._stop_pick_locked()
             phase = self.recovery.phase
-            picking = self.pick_active and phase == 'walk'
-            if picking:
+            if rolling and phase != 'walk':
+                self._stop_roulade_locked()
+                rolling = False
+            picking = self.pick_active and phase == 'walk' and not rolling
+            if rolling:
+                twist, head = [0.0]*3, [0.0]*4
+                selected = self.roulade_policy
+            elif picking:
                 phi = self.pick_phi
                 angle = 2.0 * math.pi * phi
                 twist = [math.cos(angle), math.sin(angle), 0.0]
@@ -441,17 +503,20 @@ class Controller:
             self.sent += 1
 
     def _keep_warm_idle(self):
-        """Run one dummy pass on an idle session so walk/getup/pick stay hot."""
+        """Run one dummy pass on an idle session so walk/getup/pick/roulade stay hot."""
         with self.lock:
             phase = self.recovery.phase
-            picking = self.pick_active and phase == 'walk'
-            if picking:
+            rolling = self._roulade_on(time.monotonic()) and phase == 'walk'
+            picking = self.pick_active and phase == 'walk' and not rolling
+            if rolling:
+                active = self.roulade_policy
+            elif picking:
                 active = self.pick_policy
             elif phase == 'walk':
                 active = self.policy
             else:
                 active = self.getup_policy
-            candidates = [p for p in (self.policy, self.getup_policy, self.pick_policy) if p is not active]
+            candidates = [p for p in (self.policy, self.getup_policy, self.pick_policy, self.roulade_policy) if p is not active]
         if not candidates:
             return
         self._warm_index = (self._warm_index + 1) % len(candidates)
@@ -470,7 +535,7 @@ class Controller:
             except Exception as exc:
                 with self.lock:
                     self.last_error = str(exc); self.mode = 'off'; self.generation += 1; self.arm_pending = False
-                    self._stop_pick_locked()
+                    self._stop_pick_locked(); self._stop_roulade_locked()
             deadline += CONTROL_PERIOD
             now = time.monotonic()
             if deadline <= now:
@@ -536,8 +601,13 @@ class Controller:
             result['pick'] = dict(active=self.pick_active, phi=self.pick_phi,
                                  period_s=PICK_PERIOD_S, mouth_close_phi=PICK_MOUTH_CLOSE_PHI,
                                  model=self.pick_policy.file)
+            remain = max(0.0, self.roulade_until - now)
+            result['roulade'] = dict(active=remain > 0, remaining_s=remain,
+                                    seconds=ROULADE_S, model=self.roulade_policy.file)
             if self.mode in ('shadow','policy'):
-                if self.pick_active and self.recovery.phase == 'walk':
+                if remain > 0 and self.recovery.phase == 'walk':
+                    result['active_model'] = self.roulade_policy.file
+                elif self.pick_active and self.recovery.phase == 'walk':
                     result['active_model'] = self.pick_policy.file
                 elif self.recovery.phase == 'walk':
                     result['active_model'] = self.policy.file

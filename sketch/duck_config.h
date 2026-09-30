@@ -48,8 +48,8 @@ static const float MOTOR_SIGN[NUM_MOTORS] = {
     -1, -1, -1, -1, -1};
 
 static const float DEFAULT_DEG[NUM_MOTORS] = {
-    0.0f, -5.0f, -24.0f, 0.0f, 24.0f,
-    0.0f, 5.0f, 24.0f, 0.0f, -24.0f,
+    0.0f, -5.0f, -23.0f, 0.0f, 23.0f,
+    0.0f, 5.0f, 23.0f, 0.0f, -23.0f,
     20.0f, 20.0f, 0.0f, 0.0f, 0.0f};
 
 struct Motor {

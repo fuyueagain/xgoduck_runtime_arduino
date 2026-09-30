@@ -1,6 +1,6 @@
 # XGO Duck
 
-This project runs walking, get-up, and pick policies on an XGODuck built around the Arduino Uno Q.
+This project runs walking, get-up, pick, and roulade policies on an XGODuck built around the Arduino Uno Q.
 
 It is based on [Microduck](https://github.com/pollen-robotics/microduck) by [Pollen Robotics](https://pollen-robotics.com/microduck/).
 
@@ -43,7 +43,7 @@ IDs follow Microduck. The bus always addresses all 15, in this order:
 | 30–33 | Neck and head. Policy order inside the 14-D action is 10–14, 30–33, 20–24. |
 | 34 | Mouth. It is not part of the policy action. The web UI commands it from 0° to 30°. |
 
-The home pose in `sketch/duck_config.h` and `python/rl_core.py` is hip/ankle ±24°, knee 0°, hip roll ±5°, neck and head pitch 20°, mouth 0°. `action_scale` is 1. Home is this table, not an ONNX metadata field.
+The home pose in `sketch/duck_config.h` and `python/rl_core.py` is hip/ankle ±23°, knee 0°, hip roll ±5°, neck and head pitch 20°, mouth 0°. `action_scale` is 1. Home is this table, not an ONNX metadata field.
 
 Factory encoder zeros are `ZERO_POS` in `sketch/duck_config.h`. A calibration overwrites them in `data/zero_pos.json` and the host copies that file into MCU RAM at startup. `data/zero_pos.json` is local to the robot and is gitignored.
 
@@ -103,6 +103,7 @@ The app boots in **inference only**: the network runs, torque stays off. From th
 | Default pose | Holds the home pose. Requires a fresh MCU and IMU sample. |
 | Walk / get up | Enables position control and the recovery state machine. |
 | Pick | While upright in walk, runs `xgoduck_pick.onnx` for 4 s, then returns to walk. |
+| Roulade | While upright in walk, runs `xgoduck_roulade.onnx` for 1.9 s, then returns to walk. |
 | Torque off | Disables position control. |
 
 Closing the page, or leaving it in the background for more than 1 second, turns position control off. Calibration and servo setup use a 2 second heartbeat and then exit and turn torque off.
@@ -116,8 +117,9 @@ Models in `python/`:
 - `xgoduck_walk.onnx`
 - `xgoduck_getup.onnx`
 - `xgoduck_pick.onnx`
+- `xgoduck_roulade.onnx`
 
-Each expects observation `[1, 61]` and emits action `[1, 14]`. All three are loaded and warmed at startup. Spare time in the 50 Hz loop runs one dummy pass on an idle session so a switch does not pay a cold start.
+Each expects observation `[1, 61]` and emits action `[1, 14]`. All four are loaded and warmed at startup. Spare time in the 50 Hz loop runs one dummy pass on an idle session so a switch does not pay a cold start.
 
 Observation layout: gyro (rad/s), gravity, 14 joint positions relative to home, 14 joint velocities, previous action, twist (3), head (4), and six zeros.
 
@@ -126,6 +128,7 @@ Recovery, evaluated on the 50 Hz clock:
 - Tilt above 55° for 0.15 s → get-up model, action forced to 0 for 1 s, then the get-up action. Twist and head are zero.
 - Tilt below 15° for 1 s → walk, and the web twist/head/mouth commands apply again.
 - Pick, only from upright walk: command `[cos(2πφ), sin(2πφ), 0]` plus ten zeros, `φ` advances by `dt/4` (a 4 s cycle). The mouth opens to 30° and closes when φ ≥ 0.4.
+- Roulade, only from upright walk: runs for 1.9 s with twist, head, and the six trailing command inputs at 0. Gyro, gravity, joint position, joint velocity, and the previous action stay on the usual path. Leg and neck smoothing drop to α = 0.15 for that window, then return to the previous values. Tilt does not select get-up until the 1.9 s ends.
 
 Action smoothing uses α = 0.45 on slices `[0:5]`, `[5:10]`, and `[10:14]`. `prev_action` stores the raw network output and is cleared on a policy switch. The 1 s fallen hold sends the home pose directly and does not keep a filtered walk action. Gyro smoothing α = 0.5, joint-velocity α = 0.4, gravity complementary-filter τ = 0.3 s. Accelerometer correction falls off when the norm leaves 1 g by more than about 20%. There is no gyro bias subtraction. The QMI axes are mapped once, in firmware; the host undoes the reference device mapping so the filter matches the Microduck math without applying that mapping twice.
 

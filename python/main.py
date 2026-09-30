@@ -32,6 +32,10 @@ def pick(_body: dict = None):
     try: return controller.start_pick()
     except ValueError as exc: raise HTTPException(400, str(exc))
 
+def roulade(_body: dict = None):
+    try: return controller.start_roulade()
+    except ValueError as exc: raise HTTPException(400, str(exc))
+
 def cal_enter(_body: dict = None):
     try: return controller.set_mode('calibrate')
     except ValueError as exc: raise HTTPException(400, str(exc))
@@ -70,6 +74,7 @@ ui.expose_api('POST', '/api/mode', mode)
 ui.expose_api('POST', '/api/command', command)
 ui.expose_api('POST', '/api/filter', filtering)
 ui.expose_api('POST', '/api/pick', pick)
+ui.expose_api('POST', '/api/roulade', roulade)
 ui.expose_api('POST', '/api/cal/enter', cal_enter)
 ui.expose_api('POST', '/api/cal/exit', cal_exit)
 ui.expose_api('POST', '/api/cal/targets', cal_targets)

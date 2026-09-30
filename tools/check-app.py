@@ -21,7 +21,7 @@ try:
     assert not after['enabled'] and after['mode']=='off'
     assert after['mcu_command_seq']>before['mcu_command_seq']
     assert after['mcu_command_age_us']<100000
-    assert len(after['targets'])==15 and abs(after['targets'][2]+24)<.01
+    assert len(after['targets'])==15 and abs(after['targets'][2]+23)<.01
     checks.append('off mode and 15-target MCU acknowledgement')
     for path,body in [('command',{'twist':[2,0,0]}),('command',{'head':[0]}),
                       ('command',{'mouth':31}),('filter',{'leg':-1}),('mode',{'mode':'unknown'})]:
