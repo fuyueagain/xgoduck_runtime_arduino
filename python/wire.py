@@ -13,7 +13,7 @@ ALL_MASK = 0x7fff  # hardware order: 10..14,20..24,30..34
 DISARM, ARM, POLICY, HOLD = range(4)
 
 CAL_ENTER, CAL_EXIT, CAL_SET_RAW, CAL_FINISH_ONE, CAL_SET_ZEROS = range(5)
-SERVO_ENTER, SERVO_EXIT, SERVO_UNLOCK, SERVO_SET_ID, SERVO_GOTO, SERVO_SET_PERM_KP_KD, SERVO_READ = range(7)
+SERVO_ENTER, SERVO_EXIT, SERVO_UNLOCK, SERVO_SET_ID, SERVO_GOTO, SERVO_SET_PERM_KP_KD, SERVO_READ, SERVO_READ_GAINS = range(8)
 
 assert STATE.size == 240
 assert COMMAND.size == 80
@@ -91,7 +91,7 @@ def encode_cal(op, index=0, mask=ALL_MASK, raw=None):
     return CAL.pack(b'DQL1', op, index & 0xff, mask & 0xffff, *[int(v) & 0xffff for v in values])
 
 def encode_servo(op, target_id, new_id=0, kp=5, kd=20, raw_pos=2047):
-    if op not in range(7):
+    if op not in range(8):
         raise ValueError('invalid servo op')
     if not 1 <= int(target_id) <= 253:
         raise ValueError('invalid target id')
@@ -114,7 +114,9 @@ def decode_servo_reply(data):
     x = SERVO_REPLY.unpack(data)
     if x[0] != b'DQS2':
         raise ValueError('invalid servo reply ABI')
-    return {'op': x[1], 'target_id': x[2], 'ok': bool(x[3]), 'raw_pos': x[5], 'zero_pos': x[6]}
+    raw_pos = x[5]
+    return {'op': x[1], 'target_id': x[2], 'ok': bool(x[3]), 'raw_pos': raw_pos,
+            'zero_pos': x[6], 'kp': (raw_pos >> 8) & 0xff, 'kd': raw_pos & 0xff}
 
 def elapsed_us(now, before):
     return (now-before) & 0xffffffff

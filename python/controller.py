@@ -9,6 +9,7 @@ from policy import Policy
 from recovery import Recovery
 from proc import SignalFilter
 from rl_core import MOTOR_IDS, HOME_DEG, DEFAULT_DEG, GRAVITY_TAU, IMU_BIAS_DEG, MOUTH_INDEX, MOUTH_MAX_DEG
+from servo_setup import position_reached, validate_scan_result, validate_servo_id
 from wire import *
 
 FACTORY_ZERO = [
@@ -82,6 +83,8 @@ class Controller:
         self.raw_mask = 0
         self.servo_reply = None
         self.servo_reply_event = threading.Event()
+        self.servo_io_lock = threading.Lock()
+        self.servo_scan_cancel = threading.Event()
         self._zeros_pushed = False
         self._load_zeros()
 
@@ -204,6 +207,8 @@ class Controller:
                 self.cal_done = [False]*15
                 self.bridge.notify('duck_cal', encode_cal(CAL_EXIT))
             if previous == 'servo_debug' and mode != 'servo_debug':
+                self.servo_reply_event.clear()
+                self.servo_reply = None
                 self.bridge.notify('duck_servo', encode_servo(SERVO_EXIT, 10))
             if mode == 'calibrate':
                 self._disarm_now()
@@ -221,6 +226,29 @@ class Controller:
             self.pick_policy.reset_action_filter()
             self.roulade_policy.reset_action_filter()
         return {'mode': mode}
+
+    def exit_servo_setup(self):
+        self.servo_scan_cancel.set()
+        with self.servo_io_lock:
+            with self.lock:
+                was_active = self.mode == 'servo_debug'
+            result = self.set_mode('shadow')
+            if not was_active:
+                result['exit_state'] = 'already_closed'
+                return result
+            try:
+                self._wait_servo_reply(SERVO_EXIT, timeout=0.8)
+            except ValueError as exc:
+                result['exit_state'] = 'unconfirmed'
+                result['detail'] = str(exc)
+                return result
+            result['exit_state'] = 'confirmed'
+            return result
+
+    def servo_heartbeat(self):
+        with self.lock:
+            self._require_servo_debug()
+            return {'mode': self.mode, 'active': True}
 
     def _models(self):
         return (self.policy, self.getup_policy, self.pick_policy, self.roulade_policy)
@@ -346,19 +374,23 @@ class Controller:
             raise ValueError('not in servo_debug mode')
         self.web_time = time.monotonic()
 
-    def servo_op(self, action, target_id, new_id=None, kp=5, kd=20, raw_pos=2047):
-        target_id = int(target_id)
+    def servo_op(self, action, target_id, new_id=None, kp=5, kd=20, raw_pos=2047, timeout=0.5):
+        with self.servo_io_lock:
+            return self._servo_op_locked(action, target_id, new_id, kp, kd, raw_pos, timeout)
+
+    def _servo_op_locked(self, action, target_id, new_id=None, kp=5, kd=20, raw_pos=2047, timeout=0.5):
+        target_id = validate_servo_id(target_id)
         with self.lock:
             self._require_servo_debug()
             if action == 'unlock':
                 op, payload = SERVO_UNLOCK, encode_servo(SERVO_UNLOCK, target_id)
             elif action == 'set_id':
-                new_id = int(new_id)
-                if not 1 <= new_id <= 253:
-                    raise ValueError('invalid new id')
+                new_id = validate_servo_id(new_id)
                 op, payload = SERVO_SET_ID, encode_servo(SERVO_SET_ID, target_id, new_id=new_id)
             elif action == 'goto':
                 raw_pos = int(raw_pos)
+                if not 0 <= raw_pos <= 4095:
+                    raise ValueError('raw position out of range')
                 op, payload = SERVO_GOTO, encode_servo(SERVO_GOTO, target_id, raw_pos=raw_pos)
             elif action == 'set_gains':
                 kp, kd = int(kp), int(kd)
@@ -368,11 +400,14 @@ class Controller:
                 payload = encode_servo(SERVO_SET_PERM_KP_KD, target_id, kp=kp, kd=kd)
             elif action == 'read':
                 op, payload = SERVO_READ, encode_servo(SERVO_READ, target_id)
+            elif action == 'read_gains':
+                op, payload = SERVO_READ_GAINS, encode_servo(SERVO_READ_GAINS, target_id)
             else:
                 raise ValueError('unknown servo action')
             self.servo_reply_event.clear()
+            self.servo_reply = None
             self.bridge.notify('duck_servo', payload)
-        return self._wait_servo_reply(op)
+        return self._wait_servo_reply(op, timeout=timeout)
 
     def _wait_servo_reply(self, op, timeout=0.5):
         if not self.servo_reply_event.wait(timeout):
@@ -383,6 +418,45 @@ class Controller:
             raise ValueError('unexpected servo reply')
         if not reply['ok']:
             raise ValueError('servo operation failed')
+        return reply
+
+    def servo_scan(self):
+        with self.servo_io_lock:
+            self.servo_scan_cancel.clear()
+            found = []
+            for target_id in range(1, 254):
+                if self.servo_scan_cancel.is_set():
+                    return {'ids': found, 'count': len(found), 'cancelled': True, 'single_id': None}
+                try:
+                    reply = self._servo_op_locked('read', target_id, timeout=0.08)
+                except ValueError:
+                    continue
+                if reply.get('target_id') == target_id:
+                    found.append(target_id)
+            return {'ids': found, 'count': len(found),
+                    'single_id': validate_scan_result(found) if len(found) == 1 else None}
+
+    def cancel_servo_scan(self):
+        self.servo_scan_cancel.set()
+        return {'cancel_requested': True}
+
+    def verify_position(self, target_id, raw_pos=2047, tolerance=3, timeout=1.5):
+        self.servo_op('goto', target_id, raw_pos=raw_pos)
+        deadline = time.monotonic() + float(timeout)
+        while time.monotonic() < deadline:
+            reply = self.servo_op('read', target_id, timeout=0.25)
+            if position_reached(reply['raw_pos'], raw_pos, tolerance):
+                reply['verified'] = True
+                reply['target_raw_pos'] = int(raw_pos)
+                return reply
+            time.sleep(0.05)
+        raise ValueError('position feedback did not reach requested target')
+
+    def verify_gains(self, target_id, kp, kd):
+        reply = self.servo_op('read_gains', target_id)
+        reply['verified'] = reply['kp'] == int(kp) and reply['kd'] == int(kd)
+        if not reply['verified']:
+            raise ValueError('stored KP/KD did not match requested values')
         return reply
 
     def step(self):
@@ -405,7 +479,7 @@ class Controller:
                 if time.monotonic()-self.web_time > 2.0:
                     previous = mode
                     self.mode = mode = 'shadow'; self.generation += 1
-                    self.last_error = 'calibrate/servo_debug heartbeat lost; exited'
+                    self.last_error = 'calibrate/servo_debug heartbeat lost; exit status unconfirmed'
                     generation = self.generation
                     if previous == 'calibrate':
                         self.cal_done = [False]*15

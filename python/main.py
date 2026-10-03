@@ -57,13 +57,28 @@ def servo_enter(_body: dict = None):
     except ValueError as exc: raise HTTPException(400, str(exc))
 
 def servo_exit(_body: dict = None):
-    try: return controller.set_mode('shadow')
+    try: return controller.exit_servo_setup()
+    except ValueError as exc: raise HTTPException(400, str(exc))
+
+def servo_heartbeat(_body: dict = None):
+    try: return controller.servo_heartbeat()
     except ValueError as exc: raise HTTPException(400, str(exc))
 
 def servo_action(body: dict):
     try:
+        action = body['action']
+        if action == 'scan_cancel':
+            return controller.cancel_servo_scan()
+        if action == 'scan':
+            return controller.servo_scan()
+        if action == 'goto_verify':
+            return controller.verify_position(
+                body['target_id'], body.get('raw_pos', 2047), body.get('tolerance', 3),
+                body.get('timeout', 1.5))
+        if action == 'gains_verify':
+            return controller.verify_gains(body['target_id'], body['kp'], body['kd'])
         return controller.servo_op(
-            body['action'], body['target_id'],
+            action, body['target_id'],
             new_id=body.get('new_id'), kp=body.get('kp', 5), kd=body.get('kd', 20),
             raw_pos=body.get('raw_pos', 2047))
     except (KeyError, TypeError, ValueError) as exc:
@@ -81,6 +96,7 @@ ui.expose_api('POST', '/api/cal/targets', cal_targets)
 ui.expose_api('POST', '/api/cal/finish', cal_finish)
 ui.expose_api('POST', '/api/servo/enter', servo_enter)
 ui.expose_api('POST', '/api/servo/exit', servo_exit)
+ui.expose_api('POST', '/api/servo/heartbeat', servo_heartbeat)
 ui.expose_api('POST', '/api/servo', servo_action)
 worker = threading.Thread(target=controller.run, name='policy50', daemon=True)
 worker.start()

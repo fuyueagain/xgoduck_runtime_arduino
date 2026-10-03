@@ -24,7 +24,8 @@ enum ServoOp : uint8_t {
   SERVO_SET_ID = 3,
   SERVO_GOTO = 4,
   SERVO_SET_PERM_KP_KD = 5,
-  SERVO_READ = 6
+  SERVO_READ = 6,
+  SERVO_READ_GAINS = 7
 };
 
 // Little endian, binary payload inside MessagePack RPC. ABI shared with wire.py.

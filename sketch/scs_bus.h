@@ -11,6 +11,13 @@ static uint8_t servoParserFlag = 0;
 static uint8_t servoRxBuffer[32];
 static uint8_t servoRxLen = 0;
 static uint8_t servoRxDataLen = 0;
+static uint8_t servoProbeId = 0;
+static uint8_t servoProbeAddress = 0;
+static uint8_t servoProbeLength = 0;
+static bool servoProbeSeen = false;
+static uint16_t servoProbeRaw = 0;
+static uint8_t servoProbeKp = 0;
+static uint8_t servoProbeKd = 0;
 
 static int motorIndexById(uint8_t id) {
   for (uint8_t i = 0; i < NUM_MOTORS; i++) {
@@ -171,9 +178,23 @@ static void readAllRegisters(uint8_t address, uint8_t length) {
 
 static void readAllState() { readAllRegisters(ADDR_PRESENT, PRESENT_LEN); }
 
-static void readSinglePresent(uint8_t id) {
-  const uint8_t data[2] = {ADDR_PRESENT, PRESENT_LEN};
+static void readSingleRegister(uint8_t id, uint8_t address, uint8_t length) {
+  const uint8_t data[2] = {address, length};
   scsWriteBuf(id, 0x02, data, 2);
+}
+
+static void readSinglePresent(uint8_t id) {
+  readSingleRegister(id, ADDR_PRESENT, PRESENT_LEN);
+}
+
+static void beginServoProbe(uint8_t id, uint8_t address, uint8_t length) {
+  servoProbeId = id;
+  servoProbeAddress = address;
+  servoProbeLength = length;
+  servoProbeSeen = false;
+  servoProbeRaw = 0;
+  servoProbeKp = 0;
+  servoProbeKd = 0;
 }
 
 static void applyMotorFb(uint8_t id, int16_t pos, int32_t vel) {
@@ -256,17 +277,32 @@ static void parseServoRx() {
           uint8_t sid = servoRxBuffer[2];
           uint8_t dataLen = servoRxDataLen;
           const int idx = motorIndexById(sid);
-          if (dataLen == 4 && servoRxBuffer[4] == 0 && idx >= 0) {
-            servoBootP[idx]=servoRxBuffer[5]; servoBootD[idx]=servoRxBuffer[6];
-            servoPdMask |= 1u << idx;
+          if (dataLen == 4 && servoRxBuffer[4] == 0) {
+            if (sid == servoProbeId && servoProbeAddress == ADDR_TEMP_KP &&
+                servoProbeLength == 2) {
+              servoProbeKp = servoRxBuffer[5];
+              servoProbeKd = servoRxBuffer[6];
+              servoProbeSeen = true;
+            }
+            if (idx >= 0) {
+              servoBootP[idx]=servoRxBuffer[5]; servoBootD[idx]=servoRxBuffer[6];
+              servoPdMask |= 1u << idx;
+            }
             break;
           }
           // Only accept the requested 6-byte status, with no device error.
-          if (dataLen != 8 || servoRxBuffer[4] != 0 || idx < 0) {
+          if (dataLen != 8 || servoRxBuffer[4] != 0) {
             break;
           }
-          applyMotorFb(sid, hostWord(servoRxBuffer[5], servoRxBuffer[6]),
-                       hostVelSignMag(servoRxBuffer[7], servoRxBuffer[8]));
+          if (sid == servoProbeId && servoProbeAddress == ADDR_PRESENT &&
+              servoProbeLength == PRESENT_LEN) {
+            servoProbeRaw = (uint16_t)hostWord(servoRxBuffer[5], servoRxBuffer[6]);
+            servoProbeSeen = true;
+          }
+          if (idx >= 0) {
+            applyMotorFb(sid, hostWord(servoRxBuffer[5], servoRxBuffer[6]),
+                         hostVelSignMag(servoRxBuffer[7], servoRxBuffer[8]));
+          }
         }
         break;
       default:

@@ -75,7 +75,7 @@ static void receiveServo(MsgPack::bin_t<uint8_t> bytes) {
   bool valid = bytes.size() == sizeof(pkt);
   if (valid) {
     memcpy(&pkt, bytes.data(), sizeof(pkt));
-    valid = memcmp(pkt.magic, "DQV1", 4) == 0 && pkt.op <= SERVO_READ &&
+    valid = memcmp(pkt.magic, "DQV1", 4) == 0 && pkt.op <= SERVO_READ_GAINS &&
             pkt.targetId != 0 && pkt.targetId != 0xFE;
     if (pkt.op == SERVO_GOTO) valid = valid && pkt.rawPos <= POS_MAX;
     if (pkt.op == SERVO_SET_ID) valid = valid && pkt.newId != 0 && pkt.newId != 0xFE;
@@ -189,6 +189,7 @@ static void applyServoOp(const ServoPacket &pkt) {
     case SERVO_READ:
       if (hostMode != HOST_SERVO_DEBUG) { reply.ok = 0; break; }
       drainServoRx();
+      beginServoProbe(pkt.targetId, ADDR_PRESENT, PRESENT_LEN);
       readSinglePresent(pkt.targetId);
       Serial1.flush();
       {
@@ -201,18 +202,31 @@ static void applyServoOp(const ServoPacket &pkt) {
       }
       {
         const int idx = motorIndexById(pkt.targetId);
+        reply.ok = servoProbeSeen ? 1 : 0;
+        reply.rawPos = servoProbeRaw;
         if (idx >= 0) {
           k_mutex_lock(&motorsMu, K_FOREVER);
-          reply.rawPos = motors[idx].fbPos;
           reply.zeroPos = motors[idx].zeroPos;
           k_mutex_unlock(&motorsMu);
-          reply.ok = (servoRxMask & (1u << idx)) ? 1 : 0;
-        } else {
-          // The ID is not in MOTOR_IDS yet. Bench programming still reports success.
-          reply.ok = 1;
-          reply.rawPos = 0;
         }
       }
+      break;
+    case SERVO_READ_GAINS:
+      if (hostMode != HOST_SERVO_DEBUG) { reply.ok = 0; break; }
+      drainServoRx();
+      beginServoProbe(pkt.targetId, ADDR_TEMP_KP, 2);
+      readSingleRegister(pkt.targetId, ADDR_TEMP_KP, 2);
+      Serial1.flush();
+      {
+        const uint32_t start = micros();
+        while ((uint32_t)(micros() - start) < SERVO_REPLY_US) {
+          parseServoRx();
+          k_sleep(K_USEC(100));
+        }
+        parseServoRx();
+      }
+      reply.ok = servoProbeSeen ? 1 : 0;
+      reply.rawPos = ((uint16_t)servoProbeKp << 8) | servoProbeKd;
       break;
   }
   k_mutex_lock(&hostMu, K_FOREVER);
