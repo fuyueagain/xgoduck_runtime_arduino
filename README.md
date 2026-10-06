@@ -51,6 +51,8 @@ Factory encoder zeros are `ZERO_POS` in `sketch/duck_config.h`. A calibration ov
 
 Do this before the servos are installed in the frame. Connect **one servo at a time**. Two servos with the same ID on the bus will both accept a write.
 
+These steps reach the servos through the Uno Q. The identical sequence also runs from a URT2 adapter with no Uno Q at all — see [Servo setup with a URT2 only](#servo-setup-with-a-urt2-only).
+
 1. Open **Servo setup** (`/servo.html`) and enter setup.
 2. Assign IDs **10–14** and **20–24** for the legs. Assign **30–34** for the neck, head, and mouth. The ID write unlocks register `0x37` and then writes `0x05`.
 3. Center that servo. **Move to** raw position **2047** and write it. Temporary run gains for this move are KP = 6 and KD = 20. ID 34 uses temporary KP = 10.
@@ -59,6 +61,39 @@ Do this before the servos are installed in the frame. Connect **one servo at a t
 6. Install the servos in the frame and finish the wiring: servo bus on D0/D1 (`Serial1`, 1 Mbps), QMI8658 on D20/D21 (`Wire`, 400 kHz, address `0x6A` then `0x6B`).
 
 After power-up the controller also writes the temporary torque register (address 40) and temporary KP/KD (addresses 50 and 51): KP = 6, KD = 20, and KP = 10 on ID 34. Torque off clears torque and does not write a goal position. Writing a goal after torque-off still drags a connected servo, so position writes are suppressed while disarmed.
+
+## Servo setup with a URT2 only
+
+`servo.html` drives the servos through the Uno Q MCU (`Serial1` on D0/D1). If the board is not on hand yet, the same wizard runs against a Feetech URT2 USB adapter from any PC:
+
+```bash
+pip install -r servo_ft/requirements.txt
+python servo_ft/app.py
+```
+
+Startup finds the port the way Device Manager would: it looks for a WCH USB-serial bridge — `USB-Enhanced-SERIAL CH343 (COM7)` — ignores Bluetooth links, and uses the one match. A fresh port is then probed to confirm the wiring and the rate:
+
+```text
+Auto-detected URT2: COM7     USB-Enhanced-SERIAL CH343 (COM7)         [1a86:55d3]
+Confirmed COM7: servo ID 10 answered at 1000000 baud.
+URT2 on COM7 at 1000000 baud, scanning IDs 1-35
+Open http://127.0.0.1:9530/servoFT.html
+```
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--port` | auto-detect | Serial port, e.g. `COM7`. Needed only when the choice is ambiguous |
+| `--baud` | `1000000` | Starting bus rate. The header picker changes it at runtime |
+| `--first` / `--last` | `1` / `35` | ID scan range. Project IDs stop at 34 |
+| `--http-port` | `9530` | Web UI port |
+| `--timeout` | `0.05` | Per-servo reply window. A scan waits this long on every silent address, so 1–35 takes about 2 s |
+| `--list` | | Print the serial ports and exit |
+
+The wizard header shows the port and rate it is talking to, and the rate picker next to it changes the baud at runtime (`POST /api/baud`) — handy when a servo only answers at another rate. The change reopens the bus, so re-run the scan afterwards. The startup probe is only a sanity check: it reports what it found and serves the page either way.
+
+`servo_ft/scs.py` speaks the SCS protocol itself: packet framing and the register map are ported from `sketch/scs_bus.h` and `sketch/duck_config.h`, so the `0x37` unlock, the `0x05` ID write, the `0x2A` goal position, and stored KP/KD at `0x15` behave exactly as they do on the Uno Q. `servo_ft/app.py` serves `assets/servoFT.html` over the same `/api/servo*` API as `python/main.py`, so it is the same wizard with its header and title changed. Three things differ. Step 3 writes the new ID and then verifies it with a fresh bus scan rather than a single read-back, because a servo reboots after an ID write and the scan also catches a second servo being present. Completed steps in the progress bar are clickable, so a mistake can be corrected without restarting the wizard. And step 4 shows a live encoder readout — a plain register read, polled twice a second, that does not move the servo.
+
+The servo bus still needs its own power supply — the URT2 only replaces the Uno Q. The steps above apply as written: one servo on the bus, assign the ID, centre at raw 2047, then store KP/KD.
 
 ## Calibration
 
@@ -138,9 +173,10 @@ Position control stops if commands are absent for 250 ms or the IMU is absent fo
 
 ```text
 app.yaml                 App Lab manifest
-assets/                  Web UI
+assets/                  Web UI (servo.html on the Uno Q, servoFT.html on a URT2)
 python/                  Host policy, Bridge client, ONNX models
 sketch/                  STM32 firmware
+servo_ft/                Standalone URT2 servo-setup host (no Uno Q)
 data/zero_pos.json       Created on the robot by calibration (not in git)
 tools/                   Bridge patch, router rate, ELF check, read-only capture
 ```
