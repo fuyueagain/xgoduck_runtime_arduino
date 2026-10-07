@@ -71,14 +71,14 @@ pip install -r servo_ft/requirements.txt
 python servo_ft/app.py
 ```
 
-Startup finds the port the way Device Manager would: it looks for a WCH USB-serial bridge — `USB-Enhanced-SERIAL CH343 (COM7)` — ignores Bluetooth links, and uses the one match. A fresh port is then probed to confirm the wiring and the rate:
+The host opens nothing on its own. It starts detached and the page attaches a port when you press **开始连接**, so an idle host never holds a COM port. The picker is built the way Device Manager would — it looks for a WCH USB-serial bridge (`USB-Enhanced-SERIAL CH343 (COM7)`) and ignores Bluetooth links — and offers every match, so two adapters can be told apart. Attaching probes IDs 1–35 and reports the first servo that answers, which confirms the wiring and the rate.
 
 ```text
-Auto-detected URT2: COM7     USB-Enhanced-SERIAL CH343 (COM7)         [1a86:55d3]
-Confirmed COM7: servo ID 10 answered at 1000000 baud.
-URT2 on COM7 at 1000000 baud, scanning IDs 1-35
+No port attached. Pick one in the page and press 开始连接.
 Open http://127.0.0.1:9530/servoFT.html
 ```
+
+Pass `--port COM7` to attach at startup instead.
 
 | Flag | Default | Effect |
 | --- | --- | --- |
@@ -91,7 +91,13 @@ Open http://127.0.0.1:9530/servoFT.html
 
 The wizard header shows the port and rate it is talking to, and the rate picker next to it changes the baud at runtime (`POST /api/baud`) — handy when a servo only answers at another rate. The change reopens the bus, so re-run the scan afterwards. The startup probe is only a sanity check: it reports what it found and serves the page either way.
 
-`servo_ft/scs.py` speaks the SCS protocol itself: packet framing and the register map are ported from `sketch/scs_bus.h` and `sketch/duck_config.h`, so the `0x37` unlock, the `0x05` ID write, the `0x2A` goal position, and stored KP/KD at `0x15` behave exactly as they do on the Uno Q. `servo_ft/app.py` serves `assets/servoFT.html` over the same `/api/servo*` API as `python/main.py`, so it is the same wizard with its header and title changed. Three things differ. Step 3 writes the new ID and then verifies it with a fresh bus scan rather than a single read-back, because a servo reboots after an ID write and the scan also catches a second servo being present. Completed steps in the progress bar are clickable, so a mistake can be corrected without restarting the wizard. And step 4 shows a live encoder readout — a plain register read, polled twice a second, that does not move the servo.
+`servo_ft/scs.py` speaks the SCS protocol itself: packet framing and the register map are ported from `sketch/scs_bus.h` and `sketch/duck_config.h`, so the `0x37` unlock, the `0x05` ID write, the `0x2A` goal position, and stored KP/KD at `0x15` behave exactly as they do on the Uno Q. `servo_ft/app.py` serves `assets/servoFT.html` over the same `/api/servo*` API as `python/main.py`, so it is the same wizard under a different header. What differs:
+
+- Connection lives in the header, not in step 1, and the page can switch ports and rate without restarting the host.
+- Step 2 writes the new ID and then verifies it with a fresh bus scan rather than a single read-back, because a servo reboots after an ID write and the scan also catches a second servo being present.
+- Step 3 shows a live encoder readout — a plain register read, polled twice a second, that does not move the servo.
+- The last two steps are merged into one, and completed steps in the progress bar are clickable so a mistake can be corrected without restarting the wizard.
+- The footer lists all fifteen project IDs, in yellow once labelled and grey until then.
 
 The servo bus still needs its own power supply — the URT2 only replaces the Uno Q. The steps above apply as written: one servo on the bus, assign the ID, centre at raw 2047, then store KP/KD.
 

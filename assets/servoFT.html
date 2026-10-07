@@ -8,39 +8,34 @@
   <header>
     <div><small>FEETECH URT2</small><h1>单颗舵机设置向导</h1></div>
     <div class='header-actions'>
-      <label class='baud-pick'>波特率<select id='baud'><option value='1000000'>1000000</option></select></label>
-      <button class='stop' id='exit'>退出设置</button>
+      <label class='pick'>端口<select id='port-list'></select></label>
+      <label class='pick'>波特率<select id='baud'><option value='1000000'>1000000</option></select></label>
+      <button class='primary' id='connect'>开始连接</button>
+      <button class='stop' id='exit'>退出</button>
     </div>
   </header>
   <p class='warn'>仅用于安装前、总线上只有一颗舵机的设置。已装机的舵机不要执行“移动到 2047”。</p>
   <ol class='wizard-steps' id='step-list'>
-    <li data-step='1'>连接</li><li data-step='2'>识别 ID</li><li data-step='3'>分配 ID</li><li data-step='4'>回中位</li><li data-step='5'>存参数</li><li data-step='6'>贴标签</li><li data-step='7'>完成</li>
+    <li data-step='1'>识别 ID</li><li data-step='2'>分配 ID</li><li data-step='3'>回中位</li><li data-step='4'>存参数</li><li data-step='5'>贴标签并完成</li>
   </ol>
-  <p id='message' class='wizard-message'>等待连接。<span id='mode'>—</span></p>
+  <p class='wizard-message'><span id='message'>未连接。</span> <span id='mode'>—</span></p>
 
   <section class='servo-panel wizard-panel' data-panel='1'>
-    <h2>1. 连接</h2>
-    <p>确认舵机已供电，总线上只有一颗，输出轴未装机。</p>
-    <label class='check-line'><input id='single-confirm' type='checkbox'> 已确认只有一颗舵机，可自由运动</label>
-    <button class='primary' id='start'>开始检测</button>
-  </section>
-
-  <section class='servo-panel wizard-panel' data-panel='2' hidden>
-    <h2>2. 识别当前 ID</h2>
+    <h2>1. 识别当前 ID</h2>
     <div class='identity-card'><span>Current ID</span><strong id='current-id'>—</strong></div>
     <p id='scan-detail' class='hint'>扫描只读，不会让舵机运动或改写参数。</p>
     <button id='scan-again'>重新扫描</button><button id='cancel-scan' hidden>取消扫描</button><button class='primary' id='continue-identify'>确认识别，继续</button>
   </section>
 
-  <section class='servo-panel wizard-panel' data-panel='3' hidden>
-    <h2>3. 分配新 ID</h2>
+  <section class='servo-panel wizard-panel' data-panel='2' hidden>
+    <h2>2. 分配新 ID</h2>
     <label>目标 ID<select id='target-id'></select></label>
     <div class='wizard-actions'><button class='primary' id='set-id'>写入新 ID</button><button id='verify-id'>验证（重新扫描）</button></div>
     <p id='id-verify' class='result'>写入后需重新扫描验证。</p>
   </section>
 
-  <section class='servo-panel wizard-panel' data-panel='4' hidden>
-    <h2>4. 回到参考中位</h2>
+  <section class='servo-panel wizard-panel' data-panel='3' hidden>
+    <h2>3. 回到参考中位</h2>
     <p class='danger-note'>下一步会使输出轴运动，勿对已装机的舵机执行。</p>
     <label class='check-line'><input id='free-confirm' type='checkbox'> 已确认输出轴可自由运动</label>
     <div class='identity-card'><span>实时位置</span><strong id='live-pos'>—</strong></div>
@@ -48,25 +43,23 @@
     <p id='position-result' class='result'>尚未执行运动。</p>
   </section>
 
-  <section class='servo-panel wizard-panel' data-panel='5' hidden>
-    <h2>5. 保存 KP/KD</h2>
+  <section class='servo-panel wizard-panel' data-panel='4' hidden>
+    <h2>4. 保存 KP/KD</h2>
     <div class='gain-form'><label>KP<input id='kp' type='number' min='0' max='255' value='5'></label><label>KD<input id='kd' type='number' min='0' max='255' value='20'></label></div>
     <button class='primary' id='set-gains'>保存参数</button>
     <p id='gain-result' class='result'>结果会区分“已发送”和“已验证”。</p>
   </section>
 
-  <section class='servo-panel wizard-panel' data-panel='6' hidden>
-    <h2>6. 贴上实体标签</h2>
+  <section class='servo-panel wizard-panel' data-panel='5' hidden>
+    <h2>5. 贴标签并完成</h2>
     <div class='label-card'><strong id='label-id'>ID —</strong><span id='label-name'>部位待识别</span></div>
     <p>把上面的 ID 和部位名称贴到实体舵机上。</p>
-    <button class='primary' id='label-done'>已贴标签，完成本颗</button>
-  </section>
-
-  <section class='servo-panel wizard-panel' data-panel='7' hidden>
-    <h2>7. 完成</h2>
-    <div id='complete-summary' class='summary'></div>
-    <p id='exit-state' class='result'></p>
-    <div class='wizard-actions'><button class='primary' id='next'>设置下一颗</button><button id='end'>结束本次设置</button></div>
+    <button class='primary' id='label-done'>已贴标，完成本颗</button>
+    <div id='finish-block' hidden>
+      <div id='complete-summary' class='summary'></div>
+      <p id='exit-state' class='result'></p>
+      <div class='wizard-actions'><button class='primary' id='next'>设置下一颗</button><button id='end'>结束本次设置</button></div>
+    </div>
   </section>
 
   <section class='servo-panel batch-panel'>
