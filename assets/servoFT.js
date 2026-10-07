@@ -13,6 +13,7 @@ let step = 1;
 let maxStep = 1;
 let sessionToken = 0;
 let serverBaud = null;
+let serverPort = null;
 let state = { currentId: null, targetId: null, writtenId: null, configVerified: false, labelConfirmed: false };
 let batch = loadBatch();
 
@@ -72,10 +73,15 @@ function chooseTarget() {
 }
 
 // --- connection ---------------------------------------------------------
-function renderConnectButton() {
-  $('connect').textContent = connected ? '断开连接' : '开始连接';
-  $('connect').classList.toggle('stop', connected);
-  $('port-list').disabled = connected;
+// The host auto-attaches at startup, so the header shows state rather than
+// offering a connect button. The pill doubles as the control: click it to
+// release the port, or to re-acquire one after the adapter was unplugged.
+function renderConnState() {
+  const el = $('conn-state');
+  el.textContent = connected ? `已连接 · ${serverPort || ''}` : '未连接 · 点击重试';
+  el.classList.toggle('on', connected);
+  el.classList.toggle('off', !connected);
+  el.title = connected ? '点击断开连接并释放串口' : '点击重新检测端口并连接';
 }
 async function loadPorts() {
   try {
@@ -84,34 +90,56 @@ async function loadPorts() {
     const found = data.ports || [];
     list.innerHTML = found.length
       ? found.map(p => `<option value='${p.device}'>${p.device} · ${p.description || 'USB 串口'}</option>`).join('')
-      : '<option value="">未检测到 URT2</option>';
-    if (data.current) list.value = data.current;
+      : '<option value="">未检测到 CH343</option>';
     connected = !!data.connected;
-    renderConnectButton();
+    // The host opened the session when it attached, so mirror it: otherwise the
+    // page sends no heartbeat and the session lapses after 30 s.
+    active = connected;
+    serverPort = data.current || null;
+    if (serverPort) list.value = serverPort;
+    renderConnState();
   } catch (_) { show('无法读取端口列表。'); }
 }
-async function connectToggle() {
-  if (connected) { await doDisconnect(); show('已断开连接。'); return; }
-  const port = $('port-list').value;
-  if (!port) { show('没有可用端口。请插好 URT2 后点此按钮重试。'); await loadPorts(); return; }
-  $('connect').disabled = true;
+async function connectTo(port) {
+  if (!port) { show('未检测到 CH343 端口。请插好 URT2 后点“未连接”重试。'); await loadPorts(); return; }
+  $('port-list').disabled = true;
+  $('conn-state').disabled = true;
   show(`正在连接 ${port}……`);
   try {
     const reply = await post('connect', { port, baud: +$('baud').value });
-    connected = true; active = true; serverBaud = reply.baud;
-    syncBaud(reply.baud); renderConnectButton();
+    connected = true; active = true; serverBaud = reply.baud; serverPort = reply.port;
+    syncBaud(reply.baud); renderConnState();
     resetCurrent();
     show(reply.probe_id
       ? `已连接 ${reply.port} @ ${reply.baud}，检测到 ID ${reply.probe_id}。`
       : `已连接 ${reply.port} @ ${reply.baud}，未检测到舵机；请检查供电和接线。`);
     await scan();
   } catch (error) { show(`连接失败：${error.message}`); }
-  finally { $('connect').disabled = false; }
+  finally { $('port-list').disabled = false; $('conn-state').disabled = false; renderConnState(); }
+}
+async function switchPort() {
+  const port = $('port-list').value;
+  if (!port || port === serverPort) return;
+  await connectTo(port);
 }
 async function doDisconnect() {
   try { await post('disconnect'); } catch (_) {}
-  connected = false; active = false;
-  resetCurrent(); renderConnectButton();
+  connected = false; active = false; serverPort = null;
+  resetCurrent(); renderConnState();
+}
+async function connStateClick() {
+  if (connected) { await doDisconnect(); show('已断开连接，串口已释放。'); return; }
+  await loadPorts();
+  const port = $('port-list').value;
+  if (!port) { show('未检测到 CH343 端口。请插好 URT2 后重试。'); return; }
+  await connectTo(port);
+}
+async function bootstrap() {
+  // Normally the host already attached a port before the page loaded. This only
+  // covers a page opened after the port was released, or an adapter plugged in
+  // between the host starting and the page opening.
+  await loadPorts();
+  if (!connected && $('port-list').value) await connectTo($('port-list').value);
 }
 function syncBaud(baud) {
   const rates = BAUD_RATES.includes(baud) ? BAUD_RATES : [baud, ...BAUD_RATES];
@@ -289,8 +317,9 @@ async function exitEarly() {
   show('设置已退出；未完成的舵机已记录为未完成。');
 }
 
-chooseTarget(); renderBatch(); setStep(1); loadPorts();
-$('connect').onclick = connectToggle; $('exit').onclick = exitEarly;
+chooseTarget(); renderBatch(); setStep(1); bootstrap();
+$('conn-state').onclick = connStateClick; $('exit').onclick = exitEarly;
+$('port-list').onchange = switchPort;
 $('baud').onchange = applyBaud;
 $('step-list').onclick = event => {
   const item = event.target.closest('li[data-step]');
@@ -306,12 +335,9 @@ setInterval(async () => {
     $('mode').textContent = status.connected
       ? [status.port, `${status.baud} baud`].filter(Boolean).join(' · ')
       : '未连接';
-    if (!!status.connected !== connected) { connected = !!status.connected; renderConnectButton(); }
+    if (status.port !== serverPort) serverPort = status.port || null;
+    if (!!status.connected !== connected) { connected = !!status.connected; renderConnState(); }
     if (status.baud && status.baud !== serverBaud) { serverBaud = status.baud; syncBaud(status.baud); }
     if (active && connected) await post('servo/heartbeat');
   } catch (_) {}
 }, 1000);
-window.addEventListener('pagehide', () => {
-  // Release the COM port when the page goes away, so another program can take it.
-  if (connected) navigator.sendBeacon('/api/disconnect', new Blob(['{}'], { type: 'application/json' }));
-});

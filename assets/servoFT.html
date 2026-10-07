@@ -10,7 +10,7 @@
     <div class='header-actions'>
       <label class='pick'>端口<select id='port-list'></select></label>
       <label class='pick'>波特率<select id='baud'><option value='1000000'>1000000</option></select></label>
-      <button class='primary' id='connect'>开始连接</button>
+      <button class='conn-state off' id='conn-state' type='button'>未连接 · 点击重试</button>
       <button class='stop' id='exit'>退出</button>
     </div>
   </header>
@@ -18,7 +18,7 @@
   <ol class='wizard-steps' id='step-list'>
     <li data-step='1'>识别 ID</li><li data-step='2'>分配 ID</li><li data-step='3'>回中位</li><li data-step='4'>存参数</li><li data-step='5'>贴标签并完成</li>
   </ol>
-  <p class='wizard-message'><span id='message'>未连接。</span> <span id='mode'>—</span></p>
+  <p class='wizard-message'><span id='message'>正在检测端口……</span> <span id='mode'>—</span></p>
 
   <section class='servo-panel wizard-panel' data-panel='1'>
     <h2>1. 识别当前 ID</h2>

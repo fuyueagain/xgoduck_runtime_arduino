@@ -71,18 +71,18 @@ pip install -r servo_ft/requirements.txt
 python servo_ft/app.py
 ```
 
-The host opens nothing on its own. It starts detached and the page attaches a port when you press **开始连接**, so an idle host never holds a COM port. The picker is built the way Device Manager would — it looks for a WCH USB-serial bridge (`USB-Enhanced-SERIAL CH343 (COM7)`) and ignores Bluetooth links — and offers every match, so two adapters can be told apart. Attaching probes IDs 1–35 and reports the first servo that answers, which confirms the wiring and the rate.
+The host attaches a port by itself at startup. It picks the best CH343/URT2 candidate — the picker is built the way Device Manager would, looking for a WCH USB-serial bridge (`USB-Enhanced-SERIAL CH343 (COM7)`) and ignoring Bluetooth links — and attaches it, then probes IDs 1–35 and reports the first servo that answers, which confirms the wiring and the rate. With several adapters it takes the best match and lists them all, so the page can switch.
 
 ```text
-No port attached. Pick one in the page and press 开始连接.
+Auto-attached COM7     USB-Enhanced-SERIAL CH343 (COM7)         [1a86:55d3] at 1000000 baud, servo ID 10 answered.
 Open http://127.0.0.1:9530/servoFT.html
 ```
 
-Pass `--port COM7` to attach at startup instead.
+If nothing looks like an adapter the host still serves the page and prints `No CH343/URT2 found`. The header shows state instead of a connect button: a pill reading **已连接 · COM7**, or **未连接 · 点击重试**. Click it to release the port — handy when FD needs COM7 — or to re-acquire one after plugging the adapter in. The port picker switches adapters without restarting the host.
 
 | Flag | Default | Effect |
 | --- | --- | --- |
-| `--port` | auto-detect | Serial port, e.g. `COM7`. Needed only when the choice is ambiguous |
+| `--port` | auto-detect | Serial port, e.g. `COM7`. Pins the choice instead of auto-attaching; failing to open it is fatal |
 | `--baud` | `1000000` | Starting bus rate. The header picker changes it at runtime |
 | `--first` / `--last` | `1` / `35` | ID scan range. Project IDs stop at 34 |
 | `--http-port` | `9530` | Web UI port |
@@ -93,7 +93,7 @@ The wizard header shows the port and rate it is talking to, and the rate picker 
 
 `servo_ft/scs.py` speaks the SCS protocol itself: packet framing and the register map are ported from `sketch/scs_bus.h` and `sketch/duck_config.h`, so the `0x37` unlock, the `0x05` ID write, the `0x2A` goal position, and stored KP/KD at `0x15` behave exactly as they do on the Uno Q. `servo_ft/app.py` serves `assets/servoFT.html` over the same `/api/servo*` API as `python/main.py`, so it is the same wizard under a different header. What differs:
 
-- Connection lives in the header, not in step 1, and the page can switch ports and rate without restarting the host.
+- Connection lives in the header, not in step 1. The host attaches the port at startup, and the header shows that as state rather than a button; the page can switch ports and rate without restarting the host.
 - Step 2 writes the new ID and then verifies it with a fresh bus scan rather than a single read-back, because a servo reboots after an ID write and the scan also catches a second servo being present.
 - Step 3 shows a live encoder readout — a plain register read, polled twice a second, that does not move the servo.
 - The last two steps are merged into one, and completed steps in the progress bar are clickable so a mistake can be corrected without restarting the wizard.

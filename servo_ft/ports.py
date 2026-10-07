@@ -42,7 +42,12 @@ def candidates():
     return [port for _, port in scored]
 
 
-def detect():
-    """The one confident URT2 port, or None when the choice is not obvious."""
+def auto():
+    """The port to attach without asking: the best candidate, or None.
+
+    Several adapters still yield a port — the page can switch — so this never
+    refuses just because the choice is wide. It only returns None when nothing
+    looks like a USB serial adapter at all.
+    """
     found = candidates()
-    return found[0] if len(found) == 1 else None
+    return found[0] if found else None

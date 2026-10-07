@@ -4,8 +4,10 @@ Serves the same `/api/servo*` surface as `python/main.py`, so the browser wizard
 in `assets/servoFT.html` runs unmodified. The difference is the backend: instead
 of `Bridge` -> STM32 -> `Serial1`, this talks to the SCS bus over a USB adapter.
 
-Nothing is opened until the page asks. The host starts with no port attached and
-`POST /api/connect` attaches one, so an idle host never grabs a COM port.
+At startup the host attaches the best CH343/URT2 candidate it finds, so the page
+opens already connected. Switch adapters from the port picker in the page, click
+the status pill to release or re-acquire the port, or pin one with `--port`. With
+no adapter present the host still serves the page and reports 未连接.
 
 Run:  python servo_ft/app.py
 Then: http://127.0.0.1:9530/servoFT.html
@@ -396,7 +398,7 @@ def _print_ports():
 
 def main():
     ap = argparse.ArgumentParser(description='Servo setup host for a Feetech URT2.')
-    ap.add_argument('--port', help='attach this port at startup; default: wait for the page')
+    ap.add_argument('--port', help='attach this port at startup; default: auto-detect the CH343')
     ap.add_argument('--baud', type=int, default=BAUD, help='default 1000000')
     ap.add_argument('--timeout', type=float, default=0.05, help='per-servo reply timeout (s)')
     ap.add_argument('--first', type=int, default=SCAN_FIRST, help='lowest ID to scan')
@@ -413,6 +415,7 @@ def main():
     controller = FtController(baud=args.baud, scan_first=args.first,
                               scan_last=args.last, timeout=args.timeout)
     if args.port:
+        # An explicit port is a request, so failing to open it is fatal.
         try:
             info = controller.connect(args.port)
         except Exception as exc:
@@ -422,7 +425,19 @@ def main():
               + (f'servo ID {info["probe_id"]} answered.' if info['probe_id']
                  else 'no servo answered.'))
     else:
-        print('No port attached. Pick one in the page and press 开始连接.')
+        found = ports.auto()
+        if found is None:
+            print('No CH343/URT2 found. Plug one in, then click 未连接 in the page.')
+        else:
+            try:
+                info = controller.connect(found.device)
+            except Exception as exc:
+                print(f'Could not open {found.device}: {type(exc).__name__}: {exc}')
+                print('Serving anyway; pick another port in the page.')
+            else:
+                print(f'Auto-attached {ports.describe(found)} at {info["baud"]} baud, '
+                      + (f'servo ID {info["probe_id"]} answered.' if info['probe_id']
+                         else 'no servo answered.'))
 
     Handler.controller = controller
     server = ThreadingHTTPServer((args.host, args.http_port),
